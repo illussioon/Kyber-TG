@@ -21,18 +21,16 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      # Мы НЕ удаляем /usr/local/lib/android в этот раз!
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
-          echo "Очищено лишнее место, SDK оставлен"
+          echo "Место очищено"
 
-      # Явно указываем путь к SDK для Gradle
+      # Указываем только путь к SDK, Gradle сам найдет NDK в подпапках
       - name: Create local.properties
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          echo "ndk.dir=$ANDROID_HOME/ndk-bundle" >> local.properties
 
       - name: Inject API Keys
         env:
@@ -47,8 +45,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        # Собираем только arm64-v8a, чтобы сэкономить память и избежать вылета по OOM
-        run: ./gradlew assembleDebug -PsplitApks=true -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=512m" --no-daemon
+        # Мы убрали -PsplitApks, чтобы не усложнять, и добавили больше памяти
+        # Также добавили флаг --stacktrace на случай новой ошибки
+        run: ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx7g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
