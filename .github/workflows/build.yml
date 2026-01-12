@@ -1,19 +1,21 @@
 name: Build Telegram Android APK
 
 on:
-  workflow_dispatch: # Запуск вручную
+  workflow_dispatch: # Запуск вручную через вкладку Actions
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Клонируем репозиторий вместе с подмодулями (критично для Telegram)
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
+      # 2. Устанавливаем Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -21,33 +23,39 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
+      # 3. Настраиваем Android SDK
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
+      # 4. Очищаем место на диске сервера (Telegram очень большой)
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
+          echo "Место на диске очищено"
 
+      # 5. Вставляем ваши ключи API в исходный код
       - name: Inject API Keys
         env:
           APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
           APP_HASH: ${{ secrets.TELEGRAM_APP_HASH }}
         run: |
-          # Используем команду sed для замены значений в BuildVars.java
-          sed -i "public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          sed -i "public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          echo "API Keys injected successfully."
+          # Исправленная команда sed с буквой 's' в начале
+          sed -i "s/public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+          sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+          echo "Ключи API успешно внедрены"
 
+      # 6. Даем права на запуск Gradle
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # 7. Запускаем сборку (самый долгий этап)
+      # Мы ограничиваем память 6 гигабайтами, чтобы сборка не упала
       - name: Build Debug APK
-        # Собираем только одну архитектуру (например, arm64), чтобы сэкономить память и время
-        # Если нужен полный APK для всех телефонов, замените на assembleDebug
-        run: ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m" --no-daemon
+        run: ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=512m" --no-daemon
 
+      # 8. Сохраняем готовый файл в артефакты GitHub
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
