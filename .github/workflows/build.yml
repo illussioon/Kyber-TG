@@ -9,13 +9,13 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout:v4
+        uses: actions/checkout@v4
         with:
-          submodules: recursive # Важно: загружаем все подмодули
+          submodules: recursive
           fetch-depth: 1
 
       - name: Set up JDK 17
-        uses: actions/setup-java:v4
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
@@ -24,19 +24,18 @@ jobs:
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      # Очистка места на диске (Telegram требует много места для сборки)
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
 
-      # Вставка API_ID и API_HASH в исходный код
       - name: Inject API Keys
         env:
           APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
           APP_HASH: ${{ secrets.TELEGRAM_APP_HASH }}
         run: |
+          # Используем команду sed для замены значений в BuildVars.java
           sed -i "public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           echo "API Keys injected successfully."
@@ -44,8 +43,9 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # Сборка APK. Используем --no-daemon и ограничение памяти, чтобы не вылетело
       - name: Build Debug APK
+        # Собираем только одну архитектуру (например, arm64), чтобы сэкономить память и время
+        # Если нужен полный APK для всех телефонов, замените на assembleDebug
         run: ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=512m" --no-daemon
 
       - name: Upload APK
