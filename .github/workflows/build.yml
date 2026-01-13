@@ -1,4 +1,4 @@
-name: Build Telegram Universal Release APK
+name: Build Telegram Universal (Space & Permission Fix)
 
 on:
   workflow_dispatch:
@@ -8,15 +8,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Агрессивная очистка места (освобождаем ~25-30 ГБ)
-      - name: Maximize Build Space
+      # 1. Агрессивная очистка места и подготовка прав
+      - name: Maximize Build Space & Fix Permissions
         run: |
+          # Удаляем мусор (освобождает ~20ГБ)
           sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android # Удаляем все старые SDK
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          docker image prune -a -f
+          
+          # Удаляем предустановленный Android SDK полностью, чтобы не было конфликтов
+          sudo rm -rf /usr/local/lib/android
+          
+          # Создаем папку заново и ДАЕМ ПРАВА ТЕКУЩЕМУ ПОЛЬЗОВАТЕЛЮ
+          sudo mkdir -p /usr/local/lib/android
+          sudo chown -R $USER:$USER /usr/local/lib/android
+          
+          echo "Место на диске после очистки:"
           df -h
 
       - name: Checkout Repository
@@ -31,7 +39,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # 2. Установка только нужных инструментов Android
+      # 2. Установка SDK теперь пройдет успешно, так как права на папку есть
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
@@ -48,25 +56,29 @@ jobs:
           sed -i "s/public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
 
-      # 3. Мы НЕ ограничиваем архитектуры здесь, чтобы собрались все (Universal)
-      
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      # 4. Сборка универсального Release APK
+      # 3. Сборка универсального APK
       - name: Build Universal Release APK
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: 1
         run: |
+          # Собираем модуль AppStandalone (он делает Fat APK под все процессоры)
           ./gradlew :TMessagesProj_AppStandalone:assembleRelease \
             -Dorg.gradle.parallel=false \
             -Dorg.gradle.workers.max=1 \
             -Dorg.gradle.jvmargs="-Xmx6g" \
             --no-daemon
 
-      # 5. Поиск и загрузка универсального файла
-      - name: Upload APK
+      # 4. Копируем результат в папку lux (внутри контейнера) и загружаем
+      - name: Prepare and Upload
+        run: |
+          mkdir -p lux
+          find TMessagesProj_AppStandalone/build/outputs/apk/release/ -name "*afat-release-unsigned.apk" -exec cp {} lux/telegram_universal.apk \;
+          
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Universal-Release
-          path: TMessagesProj_AppStandalone/build/outputs/apk/release/*.apk
+          name: Telegram-Universal-Lux
+          path: lux/telegram_universal.apk
