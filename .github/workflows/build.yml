@@ -1,4 +1,4 @@
-name: Build Telegram Android APK
+name: Build Telegram Android (Final Fix)
 
 on:
   workflow_dispatch:
@@ -27,10 +27,8 @@ jobs:
           sudo rm -rf /opt/ghc
           echo "Место очищено"
 
-      # Указываем только путь к SDK, Gradle сам найдет NDK в подпапках
       - name: Create local.properties
-        run: |
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Inject API Keys
         env:
@@ -41,16 +39,32 @@ jobs:
           sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           echo "Ключи вставлены"
 
-      - name: Grant execute permission for gradlew
+      # УЛУЧШЕННАЯ ОПТИМИЗАЦИЯ:
+      # 1. Принудительно заменяем список всех архитектур на одну arm64-v8a во всех файлах gradle
+      # 2. Ограничиваем количество потоков компилятора до 1, чтобы не вылетало по памяти (RAM)
+      - name: Force Single Architecture and Limit RAM
+        run: |
+          find . -name "build.gradle" -exec sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/g' {} +
+          find . -name "build.gradle" -exec sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86"/abiFilters "arm64-v8a"/g' {} +
+          echo "Архитектуры ограничены до arm64-v8a"
+
+      - name: Grant execute permission
         run: chmod +x gradlew
 
       - name: Build Debug APK
-        # Мы убрали -PsplitApks, чтобы не усложнять, и добавили больше памяти
-        # Также добавили флаг --stacktrace на случай новой ошибки
-        run: ./gradlew assembleDebug -Dorg.gradle.jvmargs="-Xmx7g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8" --no-daemon --stacktrace
+        env:
+          # Ограничиваем Ninja (систему сборки C++) одним потоком, чтобы не съедала всю RAM
+          CMAKE_BUILD_PARALLEL_LEVEL: 1
+        run: |
+          ./gradlew assembleDebug \
+            -Pandroid.injected.build.abi=arm64-v8a \
+            -Dorg.gradle.parallel=false \
+            -Dorg.gradle.workers.max=1 \
+            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
+            --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Debug-APK
+          name: Telegram-Final-APK
           path: TMessagesProj/build/outputs/apk/debug/*.apk
