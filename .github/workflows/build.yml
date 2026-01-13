@@ -62,7 +62,6 @@ jobs:
         run: |
           # Собираем только модуль AppStandalone, чтобы не забивать диск тестами
           ./gradlew :TMessagesProj_AppStandalone:assembleDebug \
-            -Pandroid.injected.build.abi=arm64-v8a \
             -Dorg.gradle.parallel=false \
             -Dorg.gradle.workers.max=1 \
             -Dorg.gradle.jvmargs="-Xmx6g" \
