@@ -1,4 +1,4 @@
-name: Build Telegram Android (Final Fix)
+name: Build Telegram Android (Extreme Space Save)
 
 on:
   workflow_dispatch:
@@ -8,6 +8,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Ядерная очистка места на диске GitHub (освобождает ~20-25 ГБ)
+      - name: Maximize Build Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h # Показать сколько места стало
+
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
@@ -19,16 +29,18 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
+          # Отключаем кеш Gradle, так как он сам занимает место
+          # cache: 'gradle' 
 
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          echo "Место очищено"
+      # Нам нужно переустановить только ОДИН нужный SDK, так как мы удалили всё выше
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Create local.properties
-        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # Принимаем лицензии
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 
       - name: Inject API Keys
         env:
@@ -37,34 +49,31 @@ jobs:
         run: |
           sed -i "s/public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          echo "Ключи вставлены"
 
-      # УЛУЧШЕННАЯ ОПТИМИЗАЦИЯ:
-      # 1. Принудительно заменяем список всех архитектур на одну arm64-v8a во всех файлах gradle
-      # 2. Ограничиваем количество потоков компилятора до 1, чтобы не вылетало по памяти (RAM)
-      - name: Force Single Architecture and Limit RAM
+      # Важно: Ограничиваем сборку ТОЛЬКО ОДНОЙ архитектурой
+      - name: Force Single Architecture
         run: |
           find . -name "build.gradle" -exec sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/g' {} +
           find . -name "build.gradle" -exec sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86"/abiFilters "arm64-v8a"/g' {} +
-          echo "Архитектуры ограничены до arm64-v8a"
 
       - name: Grant execute permission
         run: chmod +x gradlew
 
       - name: Build Debug APK
         env:
-          # Ограничиваем Ninja (систему сборки C++) одним потоком, чтобы не съедала всю RAM
           CMAKE_BUILD_PARALLEL_LEVEL: 1
         run: |
-          ./gradlew assembleDebug \
+          # ВАЖНО: Мы собираем только Standalone версию, а не всё подряд (Tests, Huawei и т.д.)
+          # Это сэкономит кучу места
+          ./gradlew :TMessagesProj_AppStandalone:assembleDebug \
             -Pandroid.injected.build.abi=arm64-v8a \
             -Dorg.gradle.parallel=false \
             -Dorg.gradle.workers.max=1 \
-            -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
+            -Dorg.gradle.jvmargs="-Xmx6g" \
             --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Telegram-Final-APK
-          path: TMessagesProj/build/outputs/apk/debug/*.apk
+          name: Telegram-Standalone-APK
+          path: TMessagesProj_AppStandalone/build/outputs/apk/debug/*.apk
