@@ -2,7 +2,10 @@ name: Build Telegram Universal (Space & Permission Fix)
 
 on:
   workflow_dispatch:
-
+  
+permissions:
+  contents: write   # ← ВАЖНО
+  
 jobs:
   build:
     runs-on: ubuntu-latest
