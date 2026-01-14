@@ -1,11 +1,11 @@
-name: Build Telegram Universal (Space & Permission Fix)
+name: Build Telegram Universal (Fixed)
 
 on:
   workflow_dispatch:
-  
+
 permissions:
-  contents: write   # ← ВАЖНО
-  
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,6 +18,7 @@ jobs:
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           echo "Disk space after cleanup:"
           df -h
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -37,6 +38,7 @@ jobs:
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
+
       - name: Inject API Keys
         env:
           APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
@@ -44,9 +46,12 @@ jobs:
         run: |
           sed -i "s/public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+
       - name: Grant execute permission
         run: chmod +x gradlew
 
+      # Сборка Release версии.
+      # Telegram обычно собирает все версии сразу (splits + universal) в этом таске.
       - name: Build Universal Release APK
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: 1
@@ -56,12 +61,30 @@ jobs:
             -Dorg.gradle.workers.max=1 \
             -Dorg.gradle.jvmargs="-Xmx6g" \
             --no-daemon
-      - name: Find APK
+
+      # ГЛАВНОЕ ИЗМЕНЕНИЕ ЗДЕСЬ:
+      # Мы ищем файл, содержащий слово "universal" в названии.
+      - name: Find Universal APK
         id: apk
         run: |
-          APK_PATH=$(find TMessagesProj_AppStandalone/build/outputs/apk -type f -name "*release*.apk" | head -n 1)
+          echo "Searching for Universal APK..."
+          # Ищем файл *universal*release*.apk. Если не найдем универсальный, скрипт покажет ошибку (или пустоту).
+          APK_PATH=$(find TMessagesProj_AppStandalone/build/outputs/apk -type f -name "*universal*release*.apk" | head -n 1)
+          
+          # Если вдруг universal не создался (зависит от версии исходников), пробуем найти просто release, исключая arm/x86
+          if [ -z "$APK_PATH" ]; then
+             echo "Universal specific APK not found. Searching for generic fat APK..."
+             APK_PATH=$(find TMessagesProj_AppStandalone/build/outputs/apk -type f -name "*release*.apk" | grep -v "arm" | grep -v "x86" | head -n 1)
+          fi
+
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::Could not find any suitable APK file!"
+            exit 1
+          fi
+
+          echo "Found APK: $APK_PATH"
           echo "apk=$APK_PATH" >> $GITHUB_OUTPUT
-      # -----> Создаём release и публикуем APK <-----
+
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
