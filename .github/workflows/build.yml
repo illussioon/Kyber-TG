@@ -1,102 +1,81 @@
-name: Build Telegram Universal (Space & Permission Fix)
+name: Build Telegram Universal (Fixed)
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # обязательно, чтобы загружать файлы в релизы
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Освобождение места
       - name: Maximize build space
         run: |
           sudo rm -rf /usr/share/dotnet
-          sudo rm-rf /opt/ghc
+          sudo rm -rf /opt/ghc
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           echo "Disk space after cleanup:"
           df -h
 
-      # 2. Клонируем проект
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
-      # 3. Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # 4. Android SDK
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      # 5. local.properties и лицензии
       - name: Create local.properties & accept licenses
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
 
-      # 6. API keys
       - name: Inject API Keys
         env:
           APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
           APP_HASH: ${{ secrets.TELEGRAM_APP_HASH }}
         run: |
+          # Проверяем, существуют ли секреты, иначе сборка упадет или будет работать некорректно
+          if [ -z "$APP_ID" ]; then echo "APP_ID not found in secrets!"; fi
+          
           sed -i "s/public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
 
-      # 7. Разрешение на gradlew
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      # 8. Сборка fat APK
-      - name: Build Universal Release APK
+      - name: Build Universal Debug APK
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: 1
         run: |
-          ./gradlew :TMessagesProj_AppStandalone:assembleRelease \
+          # Используем assembleDebug, чтобы APK был подписан тестовым ключом и его можно было установить
+          ./gradlew :TMessagesProj_AppStandalone:assembleDebug \
             -Dorg.gradle.parallel=false \
             -Dorg.gradle.workers.max=1 \
             -Dorg.gradle.jvmargs="-Xmx6g" \
             --no-daemon
 
-      # 9. Найти APK (любой путь)
-      - name: Find APK
-        id: apk
-        run: |
-          echo "📁 Listing folders..."
-          ls -R TMessagesProj_AppStandalone/build/outputs/apk || true
-
-          APK_PATH=$(find TMessagesProj_AppStandalone/build/outputs/apk -type f \
-            -name "*fat*release*.apk" -o \
-            -name "*standalone*release*.apk" -o \
-            -name "*release*.apk" | head -n 1)
-
-          if [ -z "$APK_PATH" ]; then
-            echo "❌ APK не найден!"
-            exit 1
-          fi
-
-          echo "✨ Найден APK: $APK_PATH"
-          echo "apk=$APK_PATH" >> $GITHUB_OUTPUT
-
-      # 10. Создаём или обновляем релиз и заливаем apk
       - name: Create GitHub Release
+        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: Telegram Universal ${{ github.run_number }}
+          name: Telegram Universal (Debug) ${{ github.run_number }}
           draft: false
           prerelease: false
+          # Ищем любой APK файл в папке сборки. 
+          # Это решает проблему, если имя файла изменилось.
           files: |
-            ${{ steps.apk.outputs.apk }}
+            **/build/outputs/apk/**/*.apk
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
