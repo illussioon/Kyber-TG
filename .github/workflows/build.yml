@@ -2,43 +2,49 @@ name: Build Telegram Universal (Space & Permission Fix)
 
 on:
   workflow_dispatch:
-  
+
 permissions:
-  contents: write   # ← ВАЖНО
-  
+  contents: write   # обязательно, чтобы загружать файлы в релизы
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Освобождение места
       - name: Maximize build space
         run: |
           sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
+          sudo rm-rf /opt/ghc
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           echo "Disk space after cleanup:"
           df -h
 
+      # 2. Клонируем проект
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
+      # 3. Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
+      # 4. Android SDK
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
+      # 5. local.properties и лицензии
       - name: Create local.properties & accept licenses
         run: |
           echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
           yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
 
+      # 6. API keys
       - name: Inject API Keys
         env:
           APP_ID: ${{ secrets.TELEGRAM_APP_ID }}
@@ -47,9 +53,11 @@ jobs:
           sed -i "s/public static int APP_ID = .*;/public static int APP_ID = $APP_ID;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "s/public static String APP_HASH = .*;/public static String APP_HASH = \"$APP_HASH\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
 
+      # 7. Разрешение на gradlew
       - name: Grant execute permission
         run: chmod +x gradlew
 
+      # 8. Сборка fat APK
       - name: Build Universal Release APK
         env:
           CMAKE_BUILD_PARALLEL_LEVEL: 1
@@ -60,21 +68,35 @@ jobs:
             -Dorg.gradle.jvmargs="-Xmx6g" \
             --no-daemon
 
+      # 9. Найти APK (любой путь)
       - name: Find APK
         id: apk
         run: |
-          APK_PATH=$(find TMessagesProj_AppStandalone/build/outputs/apk -type f -name "*release*.apk" | head -n 1)
+          echo "📁 Listing folders..."
+          ls -R TMessagesProj_AppStandalone/build/outputs/apk || true
+
+          APK_PATH=$(find TMessagesProj_AppStandalone/build/outputs/apk -type f \
+            -name "*fat*release*.apk" -o \
+            -name "*standalone*release*.apk" -o \
+            -name "*release*.apk" | head -n 1)
+
+          if [ -z "$APK_PATH" ]; then
+            echo "❌ APK не найден!"
+            exit 1
+          fi
+
+          echo "✨ Найден APK: $APK_PATH"
           echo "apk=$APK_PATH" >> $GITHUB_OUTPUT
 
-      # -----> Создаём release и публикуем APK <-----
+      # 10. Создаём или обновляем релиз и заливаем apk
       - name: Create GitHub Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Telegram Universal ${{ github.run_number }}
           draft: false
           prerelease: false
-          files: ${{ steps.apk.outputs.apk }}
+          files: |
+            ${{ steps.apk.outputs.apk }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
